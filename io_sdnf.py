@@ -102,8 +102,7 @@ class ExportSDNF(Operator, ExportHelper):
         for ob in data_seq:
             modifiers = ob.modifiers
             thickness = 0.008
-            for item in modifiers.items:
-                print(item)
+            for item in modifiers:
                 if item.name == "Solidify":
                     thickness = item.thickness
             surfaces.append({"faces": faces_from_mesh(ob, global_matrix), "thickness": thickness})
