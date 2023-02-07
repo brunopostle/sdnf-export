@@ -50,7 +50,7 @@ class ExportSDNF(Operator, ExportHelper):
     bl_description = """Save SDNF plate data"""
 
     filename_ext = ".sdnf"
-    filter_glob: StringProperty(default="*.sdnf", options={'HIDDEN'})
+    filter_glob: StringProperty(default="*.sdnf", options={"HIDDEN"})
 
     use_selection: BoolProperty(
         name="Selection Only",
@@ -59,7 +59,8 @@ class ExportSDNF(Operator, ExportHelper):
     )
     global_scale: FloatProperty(
         name="Scale",
-        min=0.01, max=1000.0,
+        min=0.01,
+        max=1000.0,
         default=1.0,
     )
     use_scene_unit: BoolProperty(
@@ -90,37 +91,47 @@ class ExportSDNF(Operator, ExportHelper):
 
         # Take into account scene's unit scale, so that 1 inch in Blender gives 1 inch elsewhere! See T42000.
         global_scale = self.global_scale
-        if scene.unit_settings.system != 'NONE' and self.use_scene_unit:
+        if scene.unit_settings.system != "NONE" and self.use_scene_unit:
             global_scale *= scene.unit_settings.scale_length
 
-        global_matrix = Matrix([[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]]) @ Matrix.Scale(global_scale, 4)
+        global_matrix = Matrix(
+            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
+        ) @ Matrix.Scale(global_scale, 4)
 
         prefix = os.path.splitext(self.filepath)[0]
         keywords_temp = keywords.copy()
-        
+
         surfaces = []
         for ob in data_seq:
             modifiers = ob.modifiers
             thickness = 0.008
+            offset = 0.000
             for item in modifiers:
                 if item.name == "Solidify":
                     thickness = item.thickness
-            surfaces.append({"faces": faces_from_mesh(ob, global_matrix), "thickness": thickness})
+                    offset = item.offset
+            surfaces.append(
+                {
+                    "faces": faces_from_mesh(ob, global_matrix),
+                    "thickness": thickness,
+                    "offset": offset,
+                }
+            )
         keywords_temp["filepath"] = prefix + ".sdnf"
         write_sdnf(surfaces=surfaces, **keywords_temp)
 
-        return {'FINISHED'}
+        return {"FINISHED"}
 
     def draw(self, context):
         pass
 
 
 class SDNF_PT_export_main(bpy.types.Panel):
-    bl_space_type = 'FILE_BROWSER'
-    bl_region_type = 'TOOL_PROPS'
+    bl_space_type = "FILE_BROWSER"
+    bl_region_type = "TOOL_PROPS"
     bl_label = ""
     bl_parent_id = "FILE_PT_operator"
-    bl_options = {'HIDE_HEADER'}
+    bl_options = {"HIDE_HEADER"}
 
     @classmethod
     def poll(cls, context):
@@ -139,8 +150,8 @@ class SDNF_PT_export_main(bpy.types.Panel):
 
 
 class SDNF_PT_export_include(bpy.types.Panel):
-    bl_space_type = 'FILE_BROWSER'
-    bl_region_type = 'TOOL_PROPS'
+    bl_space_type = "FILE_BROWSER"
+    bl_region_type = "TOOL_PROPS"
     bl_label = "Include"
     bl_parent_id = "FILE_PT_operator"
 
@@ -163,8 +174,8 @@ class SDNF_PT_export_include(bpy.types.Panel):
 
 
 class SDNF_PT_export_transform(bpy.types.Panel):
-    bl_space_type = 'FILE_BROWSER'
-    bl_region_type = 'TOOL_PROPS'
+    bl_space_type = "FILE_BROWSER"
+    bl_region_type = "TOOL_PROPS"
     bl_label = "Transform"
     bl_parent_id = "FILE_PT_operator"
 
@@ -216,6 +227,7 @@ def unregister():
 if __name__ == "__main__":
     register()
 
+
 def faces_from_mesh(ob, global_matrix):
     """
     From an object, return a generator over a list of faces.
@@ -256,7 +268,7 @@ def faces_from_mesh(ob, global_matrix):
 
 def write_sdnf(filepath, surfaces):
 
-    with open(filepath, 'w') as data:
+    with open(filepath, "w") as data:
         fw = data.write
 
         total_faces = 0
@@ -265,24 +277,33 @@ def write_sdnf(filepath, surfaces):
             surface_iterated = []
             for face in surface["faces"]:
                 total_faces += 1
-                surface_iterated.append({"face": face, "thickness": surface["thickness"]})
+                surface_iterated.append(
+                    {
+                        "face": face,
+                        "thickness": surface["thickness"],
+                        "offset": surface["offset"],
+                    }
+                )
             surfaces_iterated.append(surface_iterated)
+
+        # https://help.aveva.com/AVEVA_Everything3D/1.1/SDUVPDMS/wwhelp/wwhimpl/common/html/wwhelp.htm#href=OSUG3.32.05.html&single=true
+        # http://catiadoc.free.fr/online/sr1ug_C2/sr1ugat0801.htm
 
         # 00 Title Packet
 
-        fw('Packet 00\n')
+        fw("Packet 00\n")
         fw('""\n')
-        fw('"Eng Firm Id"\n')
-        fw('"Client Id"\n')
-        fw('"Structure Id"\n')
+        fw('"My Engineering Company"\n')
+        fw('"My Client"\n')
+        fw('"My Structure"\n')
         fw('"10/02/13" "16:27:18"\n')
-        fw('1 "_Issue_Code_"\n')
-        fw('"_Design_Code_"\n')
-        fw('0\n')
+        fw('1 "io_sdnf.py"\n')
+        fw('"My Design Code"\n')
+        fw("0\n")
 
         # 20 Plate elements
 
-        fw('Packet 20\n')
+        fw("Packet 20\n")
 
         # linear units, thickness units, and number of elements
 
@@ -296,13 +317,23 @@ def write_sdnf(filepath, surfaces):
             for item in surface:
                 face = item["face"]
                 thickness = item["thickness"]
+                offset = item["offset"]
 
-                # Member ID; Cardinal Point; Class?
-                fw(str(face_index) + " 1 0 0 \"plate\"\n")
+                # 0 = by centre
+                # 1 = positive face
+                # -1 = negative face
+                connect_point = 0
+                if offset > 0.99:
+                    connect_point = 1
+                elif offset < -0.99:
+                    connect_point = -1
+
+                # Member ID; Connect Point; Status; Class; Type
+                fw(str(face_index) + " " + str(connect_point) + ' 0 0 "plate"\n')
 
                 # Piece mark; Grade, Thickness, number of nodes
-                fw('"" "S355" ' + str(thickness) + ' ' + str(len(face)) + "\n")
+                fw('"" "S355" ' + str("%f" % thickness) + " " + str(len(face)) + "\n")
 
                 for vert in face:
-                    fw('%f %f %f\n' % vert[:])
+                    fw("%f %f %f\n" % vert[:])
                 face_index += 1
