@@ -324,9 +324,9 @@ def write_sdnf(filepath, surfaces):
                 # -1 = negative face
                 connect_point = 0
                 if offset > 0.99:
-                    connect_point = 1
-                elif offset < -0.99:
                     connect_point = -1
+                elif offset < -0.99:
+                    connect_point = 1
 
                 # Member ID; Connect Point; Status; Class; Type
                 fw(str(face_index) + " " + str(connect_point) + ' 0 0 "plate"\n')
