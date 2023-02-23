@@ -94,31 +94,38 @@ class ExportSDNF(Operator, ExportHelper):
         if scene.unit_settings.system != "NONE" and self.use_scene_unit:
             global_scale *= scene.unit_settings.scale_length
 
-        global_matrix = Matrix(
-            [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]
-        ) @ Matrix.Scale(global_scale, 4)
-
         prefix = os.path.splitext(self.filepath)[0]
         keywords_temp = keywords.copy()
 
         surfaces = []
+        edges = []
         for ob in data_seq:
-            modifiers = ob.modifiers
+
             thickness = 0.008
             offset = 0.000
-            for item in modifiers:
+            for item in ob.modifiers:
                 if item.name == "Solidify":
                     thickness = item.thickness
                     offset = item.offset
-            surfaces.append(
-                {
-                    "faces": faces_from_mesh(ob, global_matrix),
-                    "thickness": thickness,
-                    "offset": offset,
-                }
-            )
+
+            dat = faces_from_mesh(ob, Matrix.Scale(global_scale, 4))
+            if dat["polygons"]:
+                surfaces.append(
+                    {
+                        "faces": dat["polygons"],
+                        "thickness": thickness,
+                        "offset": offset,
+                    }
+                )
+            if dat["edges"]:
+                edges.append(
+                    {
+                        "edges": dat["edges"],
+                        "section": "UC152x152x23",
+                    }
+                )
         keywords_temp["filepath"] = prefix + ".sdnf"
-        write_sdnf(surfaces=surfaces, **keywords_temp)
+        write_sdnf(surfaces=surfaces, edges=edges, **keywords_temp)
 
         return {"FINISHED"}
 
@@ -248,10 +255,10 @@ def faces_from_mesh(ob, global_matrix):
     try:
         mesh = mesh_owner.to_mesh()
     except RuntimeError:
-        return
+        return {"polygons": [], "edges": []}
 
     if mesh is None:
-        return
+        return {"polygons": [], "edges": []}
 
     mat = global_matrix @ ob.matrix_world
     mesh.transform(mat)
@@ -260,13 +267,22 @@ def faces_from_mesh(ob, global_matrix):
 
     vertices = mesh.vertices
 
+    polygons = []
     for polygon in mesh.polygons:
-        yield [vertices[index].co.copy() for index in polygon.vertices]
+        polygons.append([vertices[index].co.copy() for index in polygon.vertices])
+
+    # retrieve linear elements from objects with no faces
+
+    edges = []
+    if not polygons:
+        for edge in mesh.edges:
+            edges.append([vertices[index].co.copy() for index in edge.vertices])
 
     mesh_owner.to_mesh_clear()
+    return {"polygons": polygons, "edges": edges}
 
 
-def write_sdnf(filepath, surfaces):
+def write_sdnf(filepath, surfaces, edges):
 
     with open(filepath, "w") as data:
         fw = data.write
@@ -285,6 +301,22 @@ def write_sdnf(filepath, surfaces):
                     }
                 )
             surfaces_iterated.append(surface_iterated)
+
+        total_edges = 0
+        edges_iterated = []
+        for edge_group in edges:
+            edge_group_iterated = []
+            for edge in edge_group["edges"]:
+                total_edges += 1
+                edge_group_iterated.append(
+                    {
+                        "edge": edge,
+                        "section": edge_group["section"],
+                    }
+                )
+            edges_iterated.append(edge_group_iterated)
+        print(edges_iterated)
+
 
         # https://help.aveva.com/AVEVA_Everything3D/1.1/SDUVPDMS/wwhelp/wwhimpl/common/html/wwhelp.htm#href=OSUG3.32.05.html&single=true
         # http://catiadoc.free.fr/online/sr1ug_C2/sr1ugat0801.htm
