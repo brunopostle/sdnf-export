@@ -1,3 +1,17 @@
+import bpy
+
+from bpy.props import (
+    StringProperty,
+    BoolProperty,
+    FloatProperty,
+)
+from bpy_extras.io_utils import (
+    ExportHelper,
+)
+from bpy.types import (
+    Operator,
+)
+
 #  This program is free software; you can redistribute it and/or
 #  modify it under the terms of the GNU General Public License
 #  as published by the Free Software Foundation; either version 2
@@ -12,6 +26,7 @@
 #  along with this program; if not, write to the Free Software Foundation,
 #  Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
 #
+# 2023 Bruno Postle <bruno@postle.net>
 # loosely based on io_mesh_stl by Guillaume Bouchard (Guillaum)
 
 bl_info = {
@@ -23,25 +38,6 @@ bl_info = {
     "description": "Export SDNF files",
     "category": "Import-Export",
 }
-
-
-import bpy
-from bpy.props import (
-    StringProperty,
-    BoolProperty,
-    CollectionProperty,
-    EnumProperty,
-    FloatProperty,
-)
-from bpy_extras.io_utils import (
-    ExportHelper,
-    orientation_helper,
-    axis_conversion,
-)
-from bpy.types import (
-    Operator,
-    OperatorFileListElement,
-)
 
 
 class ExportSDNF(Operator, ExportHelper):
@@ -89,7 +85,8 @@ class ExportSDNF(Operator, ExportHelper):
         else:
             data_seq = scene.objects
 
-        # Take into account scene's unit scale, so that 1 inch in Blender gives 1 inch elsewhere! See T42000.
+        # Take into account scene's unit scale, so that 1 inch in Blender
+        # gives 1 inch elsewhere! See T42000.
         global_scale = self.global_scale
         if scene.unit_settings.system != "NONE" and self.use_scene_unit:
             global_scale *= scene.unit_settings.scale_length
@@ -97,7 +94,7 @@ class ExportSDNF(Operator, ExportHelper):
         prefix = os.path.splitext(self.filepath)[0]
         keywords_temp = keywords.copy()
 
-        surfaces = []
+        polygons = []
         edges = []
         for ob in data_seq:
 
@@ -109,23 +106,27 @@ class ExportSDNF(Operator, ExportHelper):
                     offset = item.offset
 
             dat = faces_from_mesh(ob, Matrix.Scale(global_scale, 4))
-            if dat["polygons"]:
-                surfaces.append(
+
+            for polygon in dat["polygons"]:
+                polygons.append(
                     {
-                        "faces": dat["polygons"],
+                        "polygon": polygon,
                         "thickness": thickness,
                         "offset": offset,
+                        "name": ob.name,
                     }
                 )
-            if dat["edges"]:
+            for edge in dat["edges"]:
                 edges.append(
                     {
-                        "edges": dat["edges"],
+                        "edge": edge,
                         "section": "UC152x152x23",
+                        "name": ob.name,
                     }
                 )
+
         keywords_temp["filepath"] = prefix + ".sdnf"
-        write_sdnf(surfaces=surfaces, edges=edges, **keywords_temp)
+        write_sdnf(polygons=polygons, edges=edges, **keywords_temp)
 
         return {"FINISHED"}
 
@@ -243,8 +244,6 @@ def faces_from_mesh(ob, global_matrix):
     its coordinate.
     """
 
-    import bpy
-
     # get the editmode data
     if ob.mode == "EDIT":
         ob.update_from_editmode()
@@ -282,41 +281,10 @@ def faces_from_mesh(ob, global_matrix):
     return {"polygons": polygons, "edges": edges}
 
 
-def write_sdnf(filepath, surfaces, edges):
+def write_sdnf(filepath, polygons, edges):
 
     with open(filepath, "w") as data:
         fw = data.write
-
-        total_faces = 0
-        surfaces_iterated = []
-        for surface in surfaces:
-            surface_iterated = []
-            for face in surface["faces"]:
-                total_faces += 1
-                surface_iterated.append(
-                    {
-                        "face": face,
-                        "thickness": surface["thickness"],
-                        "offset": surface["offset"],
-                    }
-                )
-            surfaces_iterated.append(surface_iterated)
-
-        total_edges = 0
-        edges_iterated = []
-        for edge_group in edges:
-            edge_group_iterated = []
-            for edge in edge_group["edges"]:
-                total_edges += 1
-                edge_group_iterated.append(
-                    {
-                        "edge": edge,
-                        "section": edge_group["section"],
-                    }
-                )
-            edges_iterated.append(edge_group_iterated)
-        print(edges_iterated)
-
 
         # https://help.aveva.com/AVEVA_Everything3D/1.1/SDUVPDMS/wwhelp/wwhimpl/common/html/wwhelp.htm#href=OSUG3.32.05.html&single=true
         # http://catiadoc.free.fr/online/sr1ug_C2/sr1ugat0801.htm
@@ -333,39 +301,80 @@ def write_sdnf(filepath, surfaces, edges):
         fw('"My Design Code"\n')
         fw("0\n")
 
+        # 10 Linear elements
+
+        fw("Packet 10\n")
+
+        # linear units and number of elements
+
+        fw('"meters" ' + str(len(edges)) + "\n")
+
+        edge_index = 100001
+        for item in edges:
+            edge = item["edge"]
+            section = item["section"]
+
+            # Member number, Cardinal Point, Status, Class, Type, Piece Mark, Revision Number
+            # 100001 5 0 0 "beam" "" 0
+            fw(str(edge_index) + ' 5 0 0 "beam" "" 0\n')
+
+            edge_index += 1
+
+            # Section Size, Grade, Rotation, Mirror X axis, Mirror Y axis
+            # "UC152x152x23" "S355" 0.000000 0 0
+            fw('"' + section + '" "S355" 0.000000 0 0\n')
+
+            # Orientation Vector; Start, End Co-ordinates; Start, End Cutbacks
+            # 1.000000 0.000000 -0.000000 1000.000000 1000.000000 1000.000000 1000.000000 1000.000000 0.000000 0.000000 0.000000
+            if edge[0][0] == edge[1][0] and edge[0][1] == edge[1][1]:
+                fw("1.000000 0.000000 0.000000 ")
+            else:
+                fw("0.000000 0.000000 1.000000 ")
+            for vert in edge:
+                fw("%f %f %f " % vert[:])
+            fw("0.000000 0.000000\n")
+
+            # X, Y Cross-section offsets
+            # 0.000000 0.000000
+            fw("0.000000 0.000000\n")
+
+            # X, Y, Z Offsets Start; X, Y, Z Offsets End
+            # 0.000000 0.000000 0.000000 0.000000 0.000000 0.000000
+            fw("0.000000 0.000000 0.000000 0.000000 0.000000 0.000000\n")
+
+            # Releases - End 1 Tx, Ty, Tz, Rx, Ry, Rz; End 2 Tx, Ty, Tz, Rx, Ry, Rz
+            # 0 0 0 0 0 0 0 0 0 0 0 0
+            fw("0 0 0 0 0 0 0 0 0 0 0 0\n")
+
         # 20 Plate elements
 
         fw("Packet 20\n")
 
         # linear units, thickness units, and number of elements
 
-        fw('"meters" "meters" ' + str(total_faces) + "\n")
+        fw('"meters" "meters" ' + str(len(polygons)) + "\n")
 
         face_index = 200001
-        thickness = 0.008
+        for item in polygons:
+            face = item["polygon"]
+            thickness = item["thickness"]
+            offset = item["offset"]
 
-        for surface in surfaces_iterated:
+            # 0 = by centre
+            # 1 = positive face
+            # -1 = negative face
+            connect_point = 0
+            if offset > 0.99:
+                connect_point = -1
+            elif offset < -0.99:
+                connect_point = 1
 
-            for item in surface:
-                face = item["face"]
-                thickness = item["thickness"]
-                offset = item["offset"]
+            # Member ID; Connect Point; Status; Class; Type
+            fw(str(face_index) + " " + str(connect_point) + ' 0 0 "plate"\n')
 
-                # 0 = by centre
-                # 1 = positive face
-                # -1 = negative face
-                connect_point = 0
-                if offset > 0.99:
-                    connect_point = -1
-                elif offset < -0.99:
-                    connect_point = 1
+            # Piece mark; Grade, Thickness, number of nodes
+            fw('"" "S355" ' + str("%f" % thickness) + " " + str(len(face)) + "\n")
 
-                # Member ID; Connect Point; Status; Class; Type
-                fw(str(face_index) + " " + str(connect_point) + ' 0 0 "plate"\n')
-
-                # Piece mark; Grade, Thickness, number of nodes
-                fw('"" "S355" ' + str("%f" % thickness) + " " + str(len(face)) + "\n")
-
-                for vert in face:
-                    fw("%f %f %f\n" % vert[:])
-                face_index += 1
+            for vert in face:
+                fw("%f %f %f\n" % vert[:])
+            face_index += 1
