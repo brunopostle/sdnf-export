@@ -33,7 +33,7 @@ bl_info = {
     "name": "SDNF format",
     "author": "Bruno Postle",
     "version": (0, 0, 1),
-    "blender": (2, 8, 0),
+    "blender": (2, 80, 0),
     "location": "File > Import-Export",
     "description": "Export SDNF files",
     "category": "Import-Export",
